@@ -51,9 +51,6 @@ python replace_texts.py <numbered_csv> <translated_mapping_file> <output_csv>
 # Example:
 python replace_texts.py survey_numbered.csv translations.txt survey_translated.csv
 ```
-
-## Translation Process Example
-
 ## Use Cases
 
 ### Translation Workflow
