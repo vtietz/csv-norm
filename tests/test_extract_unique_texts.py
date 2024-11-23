@@ -1,5 +1,6 @@
 import pytest
-import os
+from io import StringIO
+from unittest.mock import patch
 from extract_unique_texts import (
     normalize_text,
     create_text_mapping,
@@ -7,13 +8,23 @@ from extract_unique_texts import (
     extract_unique_texts
 )
 
-@pytest.fixture
-def sample_csv_data():
-    return [
-        ["Hello World", "Hello;World"],
-        ["HELLO world", "New Text"],
-        ["hello  WORLD", ""]
-    ]
+def setup_mock_files(input_csv_content):
+    """Helper function to setup mock file objects"""
+    return {
+        'test_input.csv': StringIO(input_csv_content),
+        'test_mapping.txt': StringIO(),
+        'test_numbered.csv': StringIO()
+    }
+
+def mock_open_wrapper(mock_files):
+    """Creates a mock open function with the given mock files"""
+    def _mock_open(filename, mode='r', encoding=None, newline=None):
+        if filename in mock_files:
+            buffer = mock_files[filename]
+            buffer.close = lambda: None  # Prevent buffer from being closed
+            return buffer
+        raise FileNotFoundError(f"Mock file '{filename}' not found")
+    return _mock_open
 
 def test_normalize_text():
     assert normalize_text("Hello World") == "hello world"
@@ -31,50 +42,37 @@ def test_create_text_mapping():
     assert mapping["test"][0] == 3
     assert mapping["hello"][1] in ["Hello", "HELLO"]
 
-def test_process_csv_with_mapping(sample_csv_data):
-    mapping = create_text_mapping(sample_csv_data)
-    result = process_csv_with_mapping(sample_csv_data, mapping)
+@patch('builtins.open', create=True)
+def test_basic_extraction(mock_file):
+    input_csv = 'Hello;"World;Test"\nHELLO;world'
+    expected_mapping = "[1] Hello\n[2] World\n[3] Test"
+    expected_numbered = '"[1]";"[2];[3]"\n"[1]";"[2]"'
     
-    # Check that numbers are used consistently
-    first_row_first_cell = result[0][0]  # "Hello World" -> should be mapped
-    first_row_second_cell = result[0][1]  # "Hello;World" -> should be mapped
+    mock_files = setup_mock_files(input_csv)
+    mock_file.side_effect = mock_open_wrapper(mock_files)
     
-    # Less strict assertions that only verify the format is correct
-    assert "[" in first_row_first_cell and "]" in first_row_first_cell
-    assert ";" in first_row_second_cell
-    assert first_row_second_cell.count("[") == 2
-    assert first_row_second_cell.count("]") == 2
+    extract_unique_texts('test_input.csv', 'test_mapping.txt', 'test_numbered.csv')
     
-    # Check empty cell
-    assert result[2][1] == ""
+    assert mock_files['test_mapping.txt'].getvalue().strip() == expected_mapping
+    assert mock_files['test_numbered.csv'].getvalue().strip().replace('\r\n', '\n') == expected_numbered
 
-def test_extract_unique_texts(tmp_path):
-    # Create temporary file paths
-    input_csv = tmp_path / "input.csv"
-    output_mapping = tmp_path / "mapping.txt"
-    output_numbered = tmp_path / "numbered.csv"
+@patch('builtins.open', create=True)
+def test_empty_cells(mock_file):
+    input_csv = 'Hello;\nWorld;""'
+    expected_mapping = "[1] Hello\n[2] World"
+    expected_numbered = '"[1]";""\n"[2]";""'
     
-    # Create test input CSV
-    test_content = 'Hello;"World;Test"\nHELLO;world'
-    input_csv.write_text(test_content)
+    mock_files = setup_mock_files(input_csv)
+    mock_file.side_effect = mock_open_wrapper(mock_files)
     
-    # Run the function
-    extract_unique_texts(str(input_csv), str(output_mapping), str(output_numbered))
+    extract_unique_texts('test_input.csv', 'test_mapping.txt', 'test_numbered.csv')
     
-    # Check if output files exist
-    assert output_mapping.exists()
-    assert output_numbered.exists()
-    
-    # Check mapping file content
-    mapping_content = output_mapping.read_text()
-    assert "[1]" in mapping_content
-    assert "Hello" in mapping_content
-    
-    # Check numbered CSV content
-    numbered_content = output_numbered.read_text()
-    assert "[1]" in numbered_content
+    assert mock_files['test_mapping.txt'].getvalue().strip() == expected_mapping
+    assert mock_files['test_numbered.csv'].getvalue().strip().replace('\r\n', '\n') == expected_numbered
 
-def test_error_handling():
+@patch('builtins.open', create=True)
+def test_error_handling(mock_file):
+    mock_file.side_effect = FileNotFoundError()
     with pytest.raises(FileNotFoundError):
         extract_unique_texts("nonexistent.csv", "out1.txt", "out2.csv")
 
